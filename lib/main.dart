@@ -2,34 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/data/latest.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
 
-final FlutterLocalNotificationsPlugin notificationsPlugin =
-FlutterLocalNotificationsPlugin();
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  tz.initializeTimeZones();
-
-  const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-
-  await notificationsPlugin.initialize(
-    const InitializationSettings(android: android),
-  );
-
+void main() {
   runApp(MyApp());
 }
 
-// MODEL
+// ================= MODEL =================
 class Task {
   int? id;
   String name;
   String location;
   String time;
-  int remind;
   int done;
 
   Task({
@@ -37,35 +20,35 @@ class Task {
     required this.name,
     required this.location,
     required this.time,
-    required this.remind,
     this.done = 0,
   });
 
-  Map<String, dynamic> toMap() => {
-    'id': id,
-    'name': name,
-    'location': location,
-    'time': time,
-    'remind': remind,
-    'done': done,
-  };
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'location': location,
+      'time': time,
+      'done': done,
+    };
+  }
 }
 
-// DATABASE
+// ================= DATABASE =================
 class DBHelper {
   static Future<Database> initDB() async {
     return openDatabase(
       p.join(await getDatabasesPath(), 'tasks.db'),
       onCreate: (db, version) {
         return db.execute(
-          "CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, location TEXT, time TEXT, remind INTEGER, done INTEGER)",
+          "CREATE TABLE tasks(id INTEGER PRIMARY KEY, name TEXT, location TEXT, time TEXT, done INTEGER)",
         );
       },
       version: 1,
     );
   }
 
-  static Future insert(Task task) async {
+  static Future<void> insert(Task task) async {
     final db = await initDB();
     await db.insert('tasks', task.toMap());
   }
@@ -80,50 +63,28 @@ class DBHelper {
         name: maps[i]['name'] as String,
         location: maps[i]['location'] as String,
         time: maps[i]['time'] as String,
-        remind: maps[i]['remind'] as int,
         done: maps[i]['done'] as int,
       );
     });
   }
 
-  static Future delete(int id) async {
+  static Future<void> delete(int id) async {
     final db = await initDB();
     await db.delete('tasks', where: "id = ?", whereArgs: [id]);
   }
 
-  static Future update(Task task) async {
+  static Future<void> update(Task task) async {
     final db = await initDB();
-    await db.update('tasks', task.toMap(),
-        where: "id = ?", whereArgs: [task.id]);
+    await db.update(
+      'tasks',
+      task.toMap(),
+      where: "id = ?",
+      whereArgs: [task.id],
+    );
   }
 }
 
-// NOTIFICATION
-Future scheduleNotification(String title, DateTime time) async {
-  final scheduledDate = tz.TZDateTime.from(time, tz.local);
-
-  const androidDetails = AndroidNotificationDetails(
-    'channel_id',
-    'channel_name',
-    importance: Importance.max,
-    priority: Priority.high,
-  );
-
-  const details = NotificationDetails(android: androidDetails);
-
-  await notificationsPlugin.zonedSchedule(
-    DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    title,
-    'Đã đến giờ!',
-    scheduledDate,
-    details,
-    androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-    uiLocalNotificationDateInterpretation:
-    UILocalNotificationDateInterpretation.absoluteTime,
-  );
-}
-
-// UI
+// ================= APP =================
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -134,19 +95,14 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// ================= HOME (DANH SÁCH) =================
 class Home extends StatefulWidget {
   @override
-  State<Home> createState() => _HomeState();
+  _HomeState createState() => _HomeState();
 }
 
 class _HomeState extends State<Home> {
   List<Task> tasks = [];
-
-  final name = TextEditingController();
-  final location = TextEditingController();
-
-  DateTime selected = DateTime.now();
-  bool remind = false;
 
   @override
   void initState() {
@@ -154,30 +110,9 @@ class _HomeState extends State<Home> {
     load();
   }
 
-  void load() async {
+  Future<void> load() async {
     tasks = await DBHelper.getTasks();
     setState(() {});
-  }
-
-  void add() async {
-    if (name.text.isEmpty) return;
-
-    Task t = Task(
-      name: name.text,
-      location: location.text,
-      time: selected.toIso8601String(),
-      remind: remind ? 1 : 0,
-    );
-
-    await DBHelper.insert(t);
-
-    if (remind) {
-      await scheduleNotification(name.text, selected);
-    }
-
-    name.clear();
-    location.clear();
-    load();
   }
 
   void toggleDone(Task t) async {
@@ -191,6 +126,78 @@ class _HomeState extends State<Home> {
     load();
   }
 
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("📋 Lịch nhắc")),
+      body: tasks.isEmpty
+          ? Center(child: Text("Chưa có lịch nào"))
+          : ListView.builder(
+        itemCount: tasks.length,
+        itemBuilder: (_, i) {
+          var t = tasks[i];
+          return Card(
+            margin: EdgeInsets.all(10),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(15)),
+            child: ListTile(
+              leading: Icon(
+                t.done == 1
+                    ? Icons.check_circle
+                    : Icons.radio_button_unchecked,
+                color: Colors.green,
+              ),
+              title: Text(
+                t.name,
+                style: TextStyle(
+                  decoration: t.done == 1
+                      ? TextDecoration.lineThrough
+                      : null,
+                ),
+              ),
+              subtitle: Text(
+                "${t.location}\n${DateFormat("dd/MM/yyyy").format(DateTime.parse(t.time))}",
+              ),
+              isThreeLine: true,
+              onTap: () => toggleDone(t),
+              trailing: IconButton(
+                icon: Icon(Icons.delete, color: Colors.red),
+                onPressed: () => deleteTask(t.id!),
+              ),
+            ),
+          );
+        },
+      ),
+
+      // 🔥 NÚT THÊM
+      floatingActionButton: FloatingActionButton(
+        child: Icon(Icons.add),
+        onPressed: () async {
+          final result = await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => AddTaskScreen()),
+          );
+
+          if (result == true) {
+            load(); // reload list
+          }
+        },
+      ),
+    );
+  }
+}
+
+// ================= ADD SCREEN =================
+class AddTaskScreen extends StatefulWidget {
+  @override
+  _AddTaskScreenState createState() => _AddTaskScreenState();
+}
+
+class _AddTaskScreenState extends State<AddTaskScreen> {
+  final name = TextEditingController();
+  final location = TextEditingController();
+  DateTime selected = DateTime.now();
+
   Future pickDate() async {
     DateTime? d = await showDatePicker(
       context: context,
@@ -201,92 +208,50 @@ class _HomeState extends State<Home> {
     if (d != null) setState(() => selected = d);
   }
 
+  void save() async {
+    if (name.text.isEmpty) return;
+
+    Task t = Task(
+      name: name.text,
+      location: location.text,
+      time: selected.toString(),
+    );
+
+    await DBHelper.insert(t);
+
+    Navigator.pop(context, true); // 🔥 quay lại + reload
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("🔥 Nhắc việc PRO")),
+      appBar: AppBar(title: Text("➕ Thêm lịch")),
       body: Padding(
-        padding: EdgeInsets.all(10),
+        padding: EdgeInsets.all(15),
         child: Column(
           children: [
-            // FORM
-            Card(
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20)),
-              elevation: 5,
-              child: Padding(
-                padding: EdgeInsets.all(10),
-                child: Column(
-                  children: [
-                    TextField(
-                      controller: name,
-                      decoration: InputDecoration(labelText: "Tên công việc"),
-                    ),
-                    TextField(
-                      controller: location,
-                      decoration: InputDecoration(labelText: "Địa điểm"),
-                    ),
-                    Row(
-                      children: [
-                        Text(DateFormat("dd/MM/yyyy").format(selected)),
-                        IconButton(
-                          icon: Icon(Icons.calendar_month),
-                          onPressed: pickDate,
-                        )
-                      ],
-                    ),
-                    SwitchListTile(
-                      title: Text("Nhắc việc"),
-                      value: remind,
-                      onChanged: (v) => setState(() => remind = v),
-                    ),
-                    ElevatedButton(
-                      onPressed: add,
-                      child: Text("Thêm"),
-                    )
-                  ],
-                ),
-              ),
+            TextField(
+              controller: name,
+              decoration: InputDecoration(labelText: "Tên công việc"),
             ),
-
-            // LIST
-            Expanded(
-              child: ListView.builder(
-                itemCount: tasks.length,
-                itemBuilder: (_, i) {
-                  var t = tasks[i];
-                  return Card(
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(15)),
-                    elevation: 4,
-                    child: ListTile(
-                      leading: Icon(
-                        t.done == 1
-                            ? Icons.check_circle
-                            : Icons.radio_button_unchecked,
-                        color: Colors.green,
-                      ),
-                      title: Text(
-                        t.name,
-                        style: TextStyle(
-                          decoration: t.done == 1
-                              ? TextDecoration.lineThrough
-                              : null,
-                        ),
-                      ),
-                      subtitle: Text(
-                        "${t.location}\n${DateFormat("dd/MM/yyyy").format(DateTime.parse(t.time))}",
-                      ),
-                      isThreeLine: true,
-                      onTap: () => toggleDone(t),
-                      trailing: IconButton(
-                        icon: Icon(Icons.delete, color: Colors.red),
-                        onPressed: () => deleteTask(t.id!),
-                      ),
-                    ),
-                  );
-                },
-              ),
+            TextField(
+              controller: location,
+              decoration: InputDecoration(labelText: "Địa điểm"),
+            ),
+            SizedBox(height: 10),
+            Row(
+              children: [
+                Text(DateFormat("dd/MM/yyyy").format(selected)),
+                IconButton(
+                  icon: Icon(Icons.calendar_month),
+                  onPressed: pickDate,
+                )
+              ],
+            ),
+            SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: save,
+              child: Text("Lưu"),
             )
           ],
         ),
