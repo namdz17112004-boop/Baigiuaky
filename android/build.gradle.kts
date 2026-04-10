@@ -1,3 +1,9 @@
+plugins {
+    id("com.android.application")
+    id("kotlin-android")
+    id("dev.flutter.flutter-gradle-plugin")
+}
+
 android {
     namespace = "com.example.reminder_app"
     compileSdk = 37
@@ -11,7 +17,7 @@ android {
     }
 
     compileOptions {
-        isCoreLibraryDesugaringEnabled = true   // 🔥 QUAN TRỌNG
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -29,4 +35,8 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+}
+
+flutter {
+    source = "../.."
 }
