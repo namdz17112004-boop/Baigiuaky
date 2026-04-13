@@ -2,9 +2,37 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
 
-void main() {
+// 🔔 Notification
+final FlutterLocalNotificationsPlugin notifications =
+FlutterLocalNotificationsPlugin();
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
   runApp(MyApp());
+
+  // 🔥 init sau để tránh lag
+  initNotification();
+}
+
+// 🔥 tách riêng để tránh block UI
+Future initNotification() async {
+  tz.initializeTimeZones();
+  tz.setLocalLocation(tz.getLocation('Asia/Ho_Chi_Minh'));
+
+  const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const settings = InitializationSettings(android: android);
+
+  await notifications.initialize(settings);
+
+  await notifications
+      .resolvePlatformSpecificImplementation<
+      AndroidFlutterLocalNotificationsPlugin>()
+      ?.requestNotificationsPermission();
 }
 
 // ================= MODEL =================
@@ -41,8 +69,7 @@ class DBHelper {
       p.join(await getDatabasesPath(), 'tasks.db'),
       onCreate: (db, version) {
         return db.execute(
-          "CREATE TABLE tasks(id INTEGER PRIMARY KEY, name TEXT, location TEXT, time TEXT, done INTEGER)",
-        );
+            "CREATE TABLE tasks(id INTEGER PRIMARY KEY, name TEXT, location TEXT, time TEXT, done INTEGER)");
       },
       version: 1,
     );
@@ -75,12 +102,36 @@ class DBHelper {
 
   static Future<void> update(Task task) async {
     final db = await initDB();
-    await db.update(
-      'tasks',
-      task.toMap(),
-      where: "id = ?",
-      whereArgs: [task.id],
+    await db.update('tasks', task.toMap(),
+        where: "id = ?", whereArgs: [task.id]);
+  }
+}
+
+// ================= NOTIFICATION =================
+Future scheduleNotification(DateTime time, String title) async {
+  try {
+    await notifications.zonedSchedule(
+      DateTime.now().millisecondsSinceEpoch,
+      "🔔 Nhắc việc",
+      title,
+      tz.TZDateTime.from(time, tz.local),
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'task_channel',
+          'Nhắc việc',
+          importance: Importance.max,
+          priority: Priority.high,
+        ),
+      ),
+
+      // 🔥 FIX Ở ĐÂY
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+
+      uiLocalNotificationDateInterpretation:
+      UILocalNotificationDateInterpretation.absoluteTime,
     );
+  } catch (e) {
+    print("❌ Notification lỗi: $e");
   }
 }
 
@@ -95,7 +146,7 @@ class MyApp extends StatelessWidget {
   }
 }
 
-// ================= HOME (DANH SÁCH) =================
+// ================= HOME =================
 class Home extends StatefulWidget {
   @override
   _HomeState createState() => _HomeState();
@@ -103,6 +154,8 @@ class Home extends StatefulWidget {
 
 class _HomeState extends State<Home> {
   List<Task> tasks = [];
+  List<Task> filtered = [];
+  TextEditingController search = TextEditingController();
 
   @override
   void initState() {
@@ -110,12 +163,25 @@ class _HomeState extends State<Home> {
     load();
   }
 
-  Future<void> load() async {
+  // 🔥 FIX LAG
+  Future load() async {
+    await Future.delayed(Duration(milliseconds: 100));
     tasks = await DBHelper.getTasks();
+    filtered = tasks;
+
+    if (mounted) setState(() {});
+  }
+
+  void searchTask(String keyword) {
+    filtered = tasks
+        .where((t) =>
+    t.name.toLowerCase().contains(keyword.toLowerCase()) ||
+        t.location.toLowerCase().contains(keyword.toLowerCase()))
+        .toList();
     setState(() {});
   }
 
-  void toggleDone(Task t) async {
+  void toggle(Task t) async {
     t.done = t.done == 1 ? 0 : 1;
     await DBHelper.update(t);
     load();
@@ -127,99 +193,147 @@ class _HomeState extends State<Home> {
   }
 
   @override
+  void dispose() {
+    search.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text("📋 Lịch nhắc")),
-      body: tasks.isEmpty
-          ? Center(child: Text("Chưa có lịch nào"))
-          : ListView.builder(
-        itemCount: tasks.length,
-        itemBuilder: (_, i) {
-          var t = tasks[i];
-          return Card(
-            margin: EdgeInsets.all(10),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(15)),
-            child: ListTile(
-              leading: Icon(
-                t.done == 1
-                    ? Icons.check_circle
-                    : Icons.radio_button_unchecked,
-                color: Colors.green,
-              ),
-              title: Text(
-                t.name,
-                style: TextStyle(
-                  decoration: t.done == 1
-                      ? TextDecoration.lineThrough
-                      : null,
-                ),
-              ),
-              subtitle: Text(
-                "${t.location}\n${DateFormat("dd/MM/yyyy").format(DateTime.parse(t.time))}",
-              ),
-              isThreeLine: true,
-              onTap: () => toggleDone(t),
-              trailing: IconButton(
-                icon: Icon(Icons.delete, color: Colors.red),
-                onPressed: () => deleteTask(t.id!),
+      body: Column(
+        children: [
+          // 🔍 SEARCH
+          Padding(
+            padding: EdgeInsets.all(10),
+            child: TextField(
+              controller: search,
+              onChanged: searchTask,
+              decoration: InputDecoration(
+                hintText: "Tìm kiếm...",
+                prefixIcon: Icon(Icons.search),
+                border:
+                OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
               ),
             ),
-          );
-        },
+          ),
+
+          Expanded(
+            child: filtered.isEmpty
+                ? Center(child: Text("Không có dữ liệu"))
+                : ListView.builder(
+              itemCount: filtered.length,
+              itemBuilder: (_, i) {
+                var t = filtered[i];
+                return Card(
+                  margin: EdgeInsets.all(10),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  child: ListTile(
+                    leading: Icon(
+                      t.done == 1
+                          ? Icons.check_circle
+                          : Icons.circle_outlined,
+                      color: Colors.green,
+                    ),
+                    title: Text(t.name),
+                    subtitle: Text(
+                      "${t.location}\n${DateFormat("dd/MM/yyyy HH:mm").format(DateTime.parse(t.time))}",
+                    ),
+                    isThreeLine: true,
+                    onTap: () => toggle(t),
+                    trailing: IconButton(
+                      icon: Icon(Icons.delete, color: Colors.red),
+                      onPressed: () => deleteTask(t.id!),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
 
-      // 🔥 NÚT THÊM
       floatingActionButton: FloatingActionButton(
         child: Icon(Icons.add),
         onPressed: () async {
-          final result = await Navigator.push(
+          var result = await Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => AddTaskScreen()),
+            MaterialPageRoute(builder: (_) => AddTask()),
           );
 
-          if (result == true) {
-            load(); // reload list
-          }
+          if (result == true) load();
         },
       ),
     );
   }
 }
 
-// ================= ADD SCREEN =================
-class AddTaskScreen extends StatefulWidget {
+// ================= ADD =================
+class AddTask extends StatefulWidget {
   @override
-  _AddTaskScreenState createState() => _AddTaskScreenState();
+  _AddTaskState createState() => _AddTaskState();
 }
 
-class _AddTaskScreenState extends State<AddTaskScreen> {
+class _AddTaskState extends State<AddTask> {
   final name = TextEditingController();
   final location = TextEditingController();
-  DateTime selected = DateTime.now();
+
+  DateTime date = DateTime.now();
+  TimeOfDay time = TimeOfDay.now();
 
   Future pickDate() async {
-    DateTime? d = await showDatePicker(
+    var d = await showDatePicker(
       context: context,
-      initialDate: selected,
+      initialDate: date,
       firstDate: DateTime(2023),
       lastDate: DateTime(2100),
     );
-    if (d != null) setState(() => selected = d);
+    if (d != null) setState(() => date = d);
+  }
+
+  Future pickTime() async {
+    var t = await showTimePicker(context: context, initialTime: time);
+    if (t != null) setState(() => time = t);
   }
 
   void save() async {
     if (name.text.isEmpty) return;
 
+    DateTime full = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+
+    // ❗ check lỗi thời gian
+    if (full.isBefore(DateTime.now())) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Thời gian không hợp lệ")),
+      );
+      return;
+    }
+
     Task t = Task(
       name: name.text,
       location: location.text,
-      time: selected.toString(),
+      time: full.toString(),
     );
 
     await DBHelper.insert(t);
+    await scheduleNotification(full, name.text);
 
-    Navigator.pop(context, true); // 🔥 quay lại + reload
+    Navigator.pop(context, true);
+  }
+
+  @override
+  void dispose() {
+    name.dispose();
+    location.dispose();
+    super.dispose();
   }
 
   @override
@@ -232,7 +346,7 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
           children: [
             TextField(
               controller: name,
-              decoration: InputDecoration(labelText: "Tên công việc"),
+              decoration: InputDecoration(labelText: "Công việc"),
             ),
             TextField(
               controller: location,
@@ -241,10 +355,19 @@ class _AddTaskScreenState extends State<AddTaskScreen> {
             SizedBox(height: 10),
             Row(
               children: [
-                Text(DateFormat("dd/MM/yyyy").format(selected)),
+                Text(DateFormat("dd/MM/yyyy").format(date)),
                 IconButton(
                   icon: Icon(Icons.calendar_month),
                   onPressed: pickDate,
+                )
+              ],
+            ),
+            Row(
+              children: [
+                Text(time.format(context)),
+                IconButton(
+                  icon: Icon(Icons.access_time),
+                  onPressed: pickTime,
                 )
               ],
             ),
